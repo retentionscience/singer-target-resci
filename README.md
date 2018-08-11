@@ -15,7 +15,7 @@ Requires Python 3
 
 target-resci takes two types of input:
 
-1. A config file containing your Stitch client id and access token
+1. A config file containing your ReSci credentials
 2. A stream of Singer-formatted data on stdin
 
 Create config file to contain your ReSci api_key and site_id:
