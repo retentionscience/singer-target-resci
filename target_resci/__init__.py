@@ -127,10 +127,13 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         self.api_key = api_key
         self.import_type = import_type
         self.resci_url = resci_url
+        self.file_id = self.make_file_id()
+        self.session = requests.Session()
+
+    def make_file_id(self):
         now_part = datetime.now().strftime('%Y%m%d-%H%M%S')
         random_part = ''.join([random.choice(string.ascii_lowercase) for i in range(2)])
-        self.file_id = "{}-{}".format(now_part, random_part)
-        self.session = requests.Session()
+        return "{}-{}".format(now_part, random_part)
 
     def headers(self):
         '''Return the headers based on the api_key'''
@@ -195,7 +198,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
             try:
                 response = self.send(file_type, file_name)
                 LOGGER.debug('Response is {}: {}'.format(response, response.content))
-                # os.remove(file_name)
+                os.remove(file_name)
 
             # An HTTPError means we got an HTTP response but it was a
             # bad status code. Try to parse the "message" from the
