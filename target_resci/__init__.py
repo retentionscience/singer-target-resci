@@ -2,7 +2,7 @@
 # pylint: disable=too-many-arguments,invalid-name,too-many-nested-blocks
 
 '''
-Target for Retention Science (ReSci) API. 
+Singer.io target for Retention Science (ReSci) API.
 Web: retentionscience.com
 Docs: developer.retentionscience.com
 '''
@@ -131,6 +131,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         self.session = requests.Session()
 
     def make_file_id(self):
+        '''Return a unique time-based id for filename'''
         now_part = datetime.now().strftime('%Y%m%d-%H%M%S')
         random_part = ''.join([random.choice(string.ascii_lowercase) for i in range(2)])
         return "{}-{}".format(now_part, random_part)
@@ -156,22 +157,28 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
 
         files = {file_type: open(file_name, 'rb')}
         params = {'import_type': self.import_type}
-        response = self.session.post(url, data=params, headers=headers, files=files, verify=ssl_verify)
+        response = self.session.post(url,
+                                     data=params,
+                                     headers=headers,
+                                     files=files,
+                                     verify=ssl_verify)
 
         response.raise_for_status()
         return response
 
     def flatten(self, d, parent_key='', sep='__'):
+        '''Flattens dictionary'''
         items = []
         for k, v in d.items():
             new_key = parent_key + sep + k if parent_key else k
             if isinstance(v, MutableMapping):
-                items.extend(flatten(v, new_key, sep=sep).items())
+                items.extend(self.flatten(v, new_key, sep=sep).items())
             else:
                 items.append((new_key, str(v) if type(v) is list else v))
         return dict(items)
 
-    def create_file(self, messages, file_type, batch_count):        
+    def create_file(self, messages, file_type, batch_count):
+        '''Creates a file and writes JSON'''
         filename = '{}-{}-{:03}.json'.format(file_type, self.file_id, batch_count)
         LOGGER.debug('Filename: %s', filename)
         with open(filename, "w") as outfile:
@@ -217,8 +224,8 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
                     LOGGER.exception('Exception while processing error response')
                     msg = '{}: {}'.format(exc.response, exc.response.content)
                 raise TargetResciException('Error persisting data for ' +
-                                            '"' + file_type +'": ' +
-                                            msg)
+                                           '"' + file_type +'": ' +
+                                           msg)
             # A RequestException other than HTTPError means we
             # couldn't even connect to ReSci. The exception is likely
             # to be very long and gross. Log the full details but just
@@ -316,7 +323,6 @@ class TargetResci(object):
             TIMINGS.log_timings()
 
     def handle_line(self, line):
-
         '''Takes a raw line from stdin and handles it, updating state and possibly
         flushing the batch to the Gate and the state to the output
         stream.
@@ -410,7 +416,7 @@ def main_impl():
         import_type = config.get('import_type')
         if not import_type:
             raise Exception('Configuration is missing required "import_type" field')
-        
+
         api_url = config.get('api_url')
         if not api_url:
             api_url = DEFAULT_RESCI_URL
@@ -419,10 +425,10 @@ def main_impl():
 
     reader = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
     TargetResci(handlers,
-                 sys.stdout,
-                 args.max_batch_bytes,
-                 args.max_batch_records,
-                 args.batch_delay_seconds).consume(reader)
+                sys.stdout,
+                args.max_batch_bytes,
+                args.max_batch_records,
+                args.batch_delay_seconds).consume(reader)
     LOGGER.info("Exiting normally")
 
 def main():
