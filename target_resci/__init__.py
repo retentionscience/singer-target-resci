@@ -421,6 +421,12 @@ def main_impl():
         if not api_url:
             api_url = DEFAULT_RESCI_URL
 
+        if not config.get('disable_collection'):
+            LOGGER.info('Sending version information to stitchdata.com. ' +
+                        'To disable sending anonymous usage data, set ' +
+                        'the config parameter "disable_collection" to true')
+            Thread(target=collect).start()
+
         handlers.append(ResciHandler(api_key, import_type, api_url))
 
     reader = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
@@ -430,6 +436,28 @@ def main_impl():
                 args.max_batch_records,
                 args.batch_delay_seconds).consume(reader)
     LOGGER.info("Exiting normally")
+
+def collect():
+    '''Send usage info to Singer collector.'''
+
+    try:
+        version = pkg_resources.get_distribution('target-resci').version
+        conn = http.client.HTTPSConnection('collector.stitchdata.com', timeout=10)
+        conn.connect()
+        params = {
+            'e': 'se',
+            'aid': 'singer',
+            'se_ca': 'target-resci',
+            'se_ac': 'open',
+            'se_la': version,
+        }
+        request_url = '/i?' + urllib.parse.urlencode(params)
+        LOGGER.debug('Collection tracking info to Singer: ' + request_url)
+        conn.request('GET', request_url)
+        conn.getresponse()
+        conn.close()
+    except Exception as e:
+        LOGGER.debug('Collection request failed' + e)
 
 def main():
     '''Main entry point'''
