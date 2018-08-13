@@ -3,6 +3,12 @@
 This is a [Singer](https://singer.io) target that reads JSON-formatted data
 following the [Singer spec](https://github.com/singer-io/getting-started/blob/master/SPEC.md).
 
+
+Usage of this target assumes you have a [Retention Science (ReSci) account](https://retentionscience.com) and proper credentials.
+Please visit the [ReSci Help Center](http://help.retentionscience.com) or the [ReSci Developer Portal](https://developer.retentionscience.com) for additional assistance.
+
+
+
 ## Install
 
 Requires Python 3
