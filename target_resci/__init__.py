@@ -188,7 +188,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
                 outfile.write("\n")
         return filename
 
-    def handle_batch(self, messages, schema, key_names, batch_count):
+    def handle_batch(self, messages, batch_count, dry_run):
         '''Handle messages by sending them to ReSci as import file.
 
         '''
@@ -203,8 +203,9 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
             file_size = os.stat(file_name).st_size
             LOGGER.debug('Posting %s file %s of size %d', file_type, file_name, file_size)
             try:
-                response = self.send(file_type, file_name)
-                LOGGER.debug('Response is {}: {}'.format(response, response.content))
+                if not dry_run:
+                    response = self.send(file_type, file_name)
+                    LOGGER.debug('Response is {}: {}'.format(response, response.content))
                 os.remove(file_name)
 
             # An HTTPError means we got an HTTP response but it was a
@@ -235,31 +236,6 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
                 raise TargetResciException('Error connecting to ReSci')
 
 
-class ValidatingHandler(object): # pylint: disable=too-few-public-methods
-    '''Validates input messages against their schema.'''
-
-    def handle_batch(self, messages, schema, key_names, batch_count): # pylint: disable=no-self-use,unused-argument
-        '''Handles messages by validating them against schema.'''
-        schema = float_to_decimal(schema)
-        validator = Draft4Validator(schema, format_checker=FormatChecker())
-        for i, message in enumerate(messages):
-            if isinstance(message, singer.RecordMessage):
-                data = float_to_decimal(message.record)
-                try:
-                    validator.validate(data)
-                    if key_names:
-                        for k in key_names:
-                            if k not in data:
-                                raise TargetResciException(
-                                    'Message {} is missing key property {}'.format(
-                                        i, k))
-                except Exception as e:
-                    raise TargetResciException(
-                        'Record does not pass schema validation: {}'.format(e))
-
-        LOGGER.info('Batch is valid')
-
-
 class TargetResci(object):
     '''Encapsulates most of the logic of target-resci.
     Useful for unit testing.
@@ -272,14 +248,13 @@ class TargetResci(object):
                  state_writer,
                  max_batch_bytes,
                  max_batch_records,
-                 batch_delay_seconds):
+                 batch_delay_seconds,
+                 dry_run):
         self.messages = []
         self.buffer_size_bytes = 0
         self.state = None
         self.batch_count = 0
-
-        # Mapping from stream name to {'schema': ..., 'key_names': ..., 'bookmark_names': ... }
-        self.stream_meta = {}
+        self.dry_run = dry_run
 
         # Instance of ResciHandler
         self.handlers = handlers
@@ -299,18 +274,15 @@ class TargetResci(object):
         self.time_last_batch_sent = time.time()
 
 
-
     def flush(self):
         '''Send all the buffered messages to ReSci.'''
 
         if self.messages:
-            stream_meta = self.stream_meta[self.messages[0].stream]
             self.batch_count += 1
             for handler in self.handlers:
                 handler.handle_batch(self.messages,
-                                     stream_meta.schema,
-                                     stream_meta.key_properties,
-                                     self.batch_count)
+                                     self.batch_count,
+                                     self.dry_run)
             self.time_last_batch_sent = time.time()
             self.messages = []
             self.buffer_size_bytes = 0
@@ -331,18 +303,7 @@ class TargetResci(object):
 
         message = singer.parse_message(line)
 
-        # If we got a Schema, set the schema and key properties for this
-        # stream. Flush the batch, if there is one, in case the schema is
-        # different.
-        if isinstance(message, singer.SchemaMessage):
-            self.flush()
-
-            self.stream_meta[message.stream] = StreamMeta(
-                message.schema,
-                message.key_properties,
-                message.bookmark_properties)
-
-        elif isinstance(message, (singer.RecordMessage, singer.ActivateVersionMessage)):
+        if isinstance(message, (singer.RecordMessage, singer.ActivateVersionMessage)):
             if self.messages and (
                     message.stream != self.messages[0].stream or
                     message.version != self.messages[0].version):
@@ -404,8 +365,11 @@ def main_impl():
     handlers = []
 
     if args.dry_run:
-        handlers.append(ValidatingHandler())
-    elif not args.config:
+        dry_run = True
+    else:
+        dry_run = False
+
+    if not args.config:
         parser.error("config file required if not in dry run mode")
     else:
         config = json.load(args.config)
@@ -434,7 +398,8 @@ def main_impl():
                 sys.stdout,
                 args.max_batch_bytes,
                 args.max_batch_records,
-                args.batch_delay_seconds).consume(reader)
+                args.batch_delay_seconds,
+                dry_run).consume(reader)
     LOGGER.info("Exiting normally")
 
 def collect():
