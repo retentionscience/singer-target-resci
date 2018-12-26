@@ -40,7 +40,7 @@ LOGGER = singer.get_logger().getChild('target_resci')
 # We use this to store schema and key properties from SCHEMA messages
 StreamMeta = namedtuple('StreamMeta', ['schema', 'key_properties', 'bookmark_properties'])
 
-DEFAULT_RESCI_URL = 'http://data.retentionscience.com/v3/import_jobs'
+DEFAULT_RESCI_URL = 'https://data.retentionscience.com/v3/import_jobs'
 DEFAULT_MAX_BATCH_BYTES = 4000000
 DEFAULT_MAX_BATCH_RECORDS = 1000000
 
