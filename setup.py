@@ -13,6 +13,7 @@ setup(
         'singer-python>=5.0.12',
         'requests==2.18.4',
         'psutil==5.3.1',
+        'backoff==1.8.0'
     ],
     entry_points="""
     [console_scripts]

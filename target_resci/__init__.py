@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 # pylint: disable=too-many-arguments,invalid-name,too-many-nested-blocks
 
-'''
+"""
 Singer.io target for Retention Science (ReSci) API.
 Web: retentionscience.com
 Docs: developer.retentionscience.com
-'''
+"""
 
 import argparse
-import copy
-import gzip
 import http.client
 import io
 import json
 import os
-import re
 import sys
 import time
 import urllib
@@ -24,13 +21,12 @@ import string
 from threading import Thread
 from contextlib import contextmanager
 from collections import namedtuple, MutableMapping
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 import psutil
 
 import requests
 from requests.exceptions import RequestException, HTTPError
-from jsonschema import ValidationError, Draft4Validator, FormatChecker
 import pkg_resources
 import singer
 import backoff
@@ -44,12 +40,14 @@ DEFAULT_RESCI_URL = 'https://data.retentionscience.com/v3/import_jobs'
 DEFAULT_MAX_BATCH_BYTES = 4000000
 DEFAULT_MAX_BATCH_RECORDS = 1000000
 
+
 class TargetResciException(Exception):
-    '''A known exception for which we don't need to print a stack trace'''
+    """A known exception for which we don't need to print a stack trace"""
     pass
 
+
 class MemoryReporter(Thread):
-    '''Logs memory usage every 30 seconds'''
+    """Logs memory usage every 30 seconds"""
 
     def __init__(self):
         self.process = psutil.Process()
@@ -64,7 +62,7 @@ class MemoryReporter(Thread):
 
 
 class Timings(object):
-    '''Gathers timing information for the three main steps of the Tap.'''
+    """Gathers timing information for the three main steps of the Tap."""
     def __init__(self):
         self.last_time = time.time()
         self.timings = {
@@ -75,8 +73,8 @@ class Timings(object):
 
     @contextmanager
     def mode(self, mode):
-        '''We wrap the big steps of the Tap in this context manager to accumulate
-        timing info.'''
+        """We wrap the big steps of the Tap in this context manager to accumulate
+        timing info."""
 
         start = time.time()
         yield
@@ -85,20 +83,20 @@ class Timings(object):
         self.timings[mode] += end - start
         self.last_time = end
 
-
     def log_timings(self):
-        '''We call this with every flush to print out the accumulated timings'''
+        """We call this with every flush to print out the accumulated timings"""
         LOGGER.debug('Timings: unspecified: %.3f; serializing: %.3f; posting: %.3f;',
                      self.timings[None],
                      self.timings['serializing'],
                      self.timings['posting'])
 
+
 TIMINGS = Timings()
 
 
 def float_to_decimal(value):
-    '''Walk the given data structure and turn all instances of float into
-    double.'''
+    """Walk the given data structure and turn all instances of float into
+    double."""
     if isinstance(value, float):
         return Decimal(str(value))
     if isinstance(value, list):
@@ -106,11 +104,6 @@ def float_to_decimal(value):
     if isinstance(value, dict):
         return {k: float_to_decimal(v) for k, v in value.items()}
     return value
-
-class BatchTooLargeException(TargetResciException):
-    '''Exception for when the records and schema are so large that we can't
-    create a batch with even one record.'''
-    pass
 
 
 def _log_backoff(details):
@@ -120,8 +113,8 @@ def _log_backoff(details):
         details['wait'], exc)
 
 
-class ResciHandler(object): # pylint: disable=too-few-public-methods
-    '''Sends messages to ReSci.'''
+class ResciHandler(object):  # pylint: disable=too-few-public-methods
+    """Sends messages to ReSci."""
 
     def __init__(self, api_key, import_type, resci_url):
         self.api_key = api_key
@@ -130,14 +123,15 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         self.file_id = self.make_file_id()
         self.session = requests.Session()
 
-    def make_file_id(self):
-        '''Return a unique time-based id for filename'''
+    @staticmethod
+    def make_file_id():
+        """Return a unique time-based id for filename"""
         now_part = datetime.now().strftime('%Y%m%d-%H%M%S')
-        random_part = ''.join([random.choice(string.ascii_lowercase) for i in range(2)])
+        random_part = ''.join([random.choice(string.ascii_lowercase) for _ in range(2)])
         return "{}-{}".format(now_part, random_part)
 
     def headers(self):
-        '''Return the headers based on the api_key'''
+        """Return the headers based on the api_key"""
         return {
             'Authorization': 'ApiKey {}'.format(self.api_key)
         }
@@ -148,7 +142,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
                           max_tries=8,
                           on_backoff=_log_backoff)
     def send(self, file_type, file_name):
-        '''Send the given data to ReSci, retrying on exceptions'''
+        """Send the given data to ReSci, retrying on exceptions"""
         url = self.resci_url
         headers = self.headers()
         ssl_verify = True
@@ -167,7 +161,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         return response
 
     def flatten(self, d, parent_key='', sep='__'):
-        '''Flattens dictionary'''
+        """Flattens dictionary"""
         items = []
         for k, v in d.items():
             new_key = parent_key + sep + k if parent_key else k
@@ -178,7 +172,7 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         return dict(items)
 
     def create_file(self, messages, file_type, batch_count):
-        '''Creates a file and writes JSON'''
+        """Creates a file and writes JSON"""
         filename = '{}-{}-{:03}.json'.format(file_type, self.file_id, batch_count)
         LOGGER.debug('Filename: %s', filename)
         with open(filename, "w") as outfile:
@@ -189,9 +183,9 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
         return filename
 
     def handle_batch(self, messages, batch_count, dry_run):
-        '''Handle messages by sending them to ReSci as import file.
+        """Handle messages by sending them to ReSci as import file.
 
-        '''
+        """
         file_type = messages[0].stream
         LOGGER.info("Sending batch with %d messages for table %s to %s",
                     len(messages), file_type, self.resci_url)
@@ -221,11 +215,11 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
                         msg = response_body['message']
                     else:
                         msg = '{}: {}'.format(exc.response, exc.response.content)
-                except: # pylint: disable=bare-except
+                except:  # pylint: disable=bare-except
                     LOGGER.exception('Exception while processing error response')
                     msg = '{}: {}'.format(exc.response, exc.response.content)
                 raise TargetResciException('Error persisting data for ' +
-                                           '"' + file_type +'": ' +
+                                           '"' + file_type + '": ' +
                                            msg)
             # A RequestException other than HTTPError means we
             # couldn't even connect to ReSci. The exception is likely
@@ -237,13 +231,13 @@ class ResciHandler(object): # pylint: disable=too-few-public-methods
 
 
 class TargetResci(object):
-    '''Encapsulates most of the logic of target-resci.
+    """Encapsulates most of the logic of target-resci.
     Useful for unit testing.
 
-    '''
+    """
 
     # pylint: disable=too-many-instance-attributes
-    def __init__(self, # pylint: disable=too-many-arguments
+    def __init__(self,  # pylint: disable=too-many-arguments
                  handlers,
                  state_writer,
                  max_batch_bytes,
@@ -273,9 +267,8 @@ class TargetResci(object):
         # Time that the last batch was sent
         self.time_last_batch_sent = time.time()
 
-
     def flush(self):
-        '''Send all the buffered messages to ReSci.'''
+        """Send all the buffered messages to ReSci."""
 
         if self.messages:
             self.batch_count += 1
@@ -295,11 +288,11 @@ class TargetResci(object):
             TIMINGS.log_timings()
 
     def handle_line(self, line):
-        '''Takes a raw line from stdin and handles it, updating state and possibly
+        """Takes a raw line from stdin and handles it, updating state and possibly
         flushing the batch to the Gate and the state to the output
         stream.
 
-        '''
+        """
 
         message = singer.parse_message(line)
 
@@ -326,15 +319,15 @@ class TargetResci(object):
         elif isinstance(message, singer.StateMessage):
             self.state = message.value
 
-
     def consume(self, reader):
-        '''Consume all the lines from the queue, flushing when done.'''
+        """Consume all the lines from the queue, flushing when done."""
         for line in reader:
             self.handle_line(line)
         self.flush()
 
+
 def main_impl():
-    '''We wrap this function in main() to add exception handling'''
+    """We wrap this function in main() to add exception handling"""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-c', '--config',
@@ -402,8 +395,9 @@ def main_impl():
                 dry_run).consume(reader)
     LOGGER.info("Exiting normally")
 
+
 def collect():
-    '''Send usage info to Singer collector.'''
+    """Send usage info to Singer collector."""
 
     try:
         version = pkg_resources.get_distribution('target-resci').version
@@ -422,10 +416,11 @@ def collect():
         conn.getresponse()
         conn.close()
     except Exception as e:
-        LOGGER.debug('Collection request failed' + e)
+        LOGGER.debug('Collection request failed' + str(e))
+
 
 def main():
-    '''Main entry point'''
+    """Main entry point"""
     try:
         MemoryReporter().start()
         main_impl()
@@ -443,6 +438,7 @@ def main():
     except Exception as exc:
         LOGGER.critical(exc)
         raise exc
+
 
 if __name__ == '__main__':
     main()
