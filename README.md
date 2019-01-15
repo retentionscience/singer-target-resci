@@ -33,7 +33,7 @@ Create config file to contain your ReSci api_key and site_id:
   "import_type": "singer_import_config"
 }
 
-# Optional, used for testing:
+// Optional, used for testing:
 "api_url": "http://test-api-url/v3/import_jobs"
 ```
 

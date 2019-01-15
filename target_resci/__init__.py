@@ -20,9 +20,8 @@ import string
 
 from threading import Thread
 from contextlib import contextmanager
-from collections import namedtuple, MutableMapping
+from collections import namedtuple
 from datetime import datetime
-from decimal import Decimal
 import psutil
 
 import requests
@@ -94,18 +93,6 @@ class Timings(object):
 TIMINGS = Timings()
 
 
-def float_to_decimal(value):
-    """Walk the given data structure and turn all instances of float into
-    double."""
-    if isinstance(value, float):
-        return Decimal(str(value))
-    if isinstance(value, list):
-        return [float_to_decimal(child) for child in value]
-    if isinstance(value, dict):
-        return {k: float_to_decimal(v) for k, v in value.items()}
-    return value
-
-
 def _log_backoff(details):
     (_, exc, _) = sys.exc_info()
     LOGGER.info(
@@ -122,6 +109,7 @@ class ResciHandler(object):  # pylint: disable=too-few-public-methods
         self.resci_url = resci_url
         self.file_id = self.make_file_id()
         self.session = requests.Session()
+        self.stream_files = {}  # Dict[str, file] that maps a stream name to an open file for that stream
 
     @staticmethod
     def make_file_id():
@@ -141,93 +129,100 @@ class ResciHandler(object):  # pylint: disable=too-few-public-methods
                           giveup=singer.utils.exception_is_4xx,
                           max_tries=8,
                           on_backoff=_log_backoff)
-    def send(self, file_type, file_name):
-        """Send the given data to ReSci, retrying on exceptions"""
+    def send_files(self):
+        """Sends all files to ReSci, retrying on exceptions"""
         url = self.resci_url
         headers = self.headers()
         ssl_verify = True
         if os.environ.get("TARGET_RESCI_SSL_VERIFY") == 'false':
             ssl_verify = False
 
-        files = {file_type: open(file_name, 'rb')}
+        files_to_send = {}
+        for stream, file in self.stream_files.items():
+            files_to_send[stream] = open(file.name, 'rb')
+
         params = {'import_type': self.import_type}
         response = self.session.post(url,
                                      data=params,
                                      headers=headers,
-                                     files=files,
+                                     files=files_to_send,
                                      verify=ssl_verify)
 
         response.raise_for_status()
         return response
 
-    def flatten(self, d, parent_key='', sep='__'):
-        """Flattens dictionary"""
-        items = []
-        for k, v in d.items():
-            new_key = parent_key + sep + k if parent_key else k
-            if isinstance(v, MutableMapping):
-                items.extend(self.flatten(v, new_key, sep=sep).items())
-            else:
-                items.append((new_key, str(v) if type(v) is list else v))
-        return dict(items)
+    def get_or_create_file(self, stream):
+        """Get the opened file for a stream, creating the file if it doesn't exist"""
+        file = self.stream_files.get(stream)
 
-    def create_file(self, messages, file_type, batch_count):
-        """Creates a file and writes JSON"""
-        filename = '{}-{}-{:03}.json'.format(file_type, self.file_id, batch_count)
-        LOGGER.debug('Filename: %s', filename)
-        with open(filename, "w") as outfile:
-            for msg in messages:
-                flattened_record = self.flatten(msg.record)
-                json.dump(flattened_record, outfile)
-                outfile.write("\n")
-        return filename
+        if file is None:
+            filename = '{}-{}.json'.format(stream, self.file_id)
+            LOGGER.debug('Opening file %s', filename)
+            file = open(filename, 'w')
+            self.stream_files[stream] = file
 
-    def handle_batch(self, messages, batch_count, dry_run):
-        """Handle messages by sending them to ReSci as import file.
+        return file
+
+    def write_to_file(self, messages, stream, batch_count):
+        """Writes the given messages to the file for the stream"""
+        file = self.get_or_create_file(stream)
+        LOGGER.debug('Writing batch %d to %s', batch_count, file.name)
+        for msg in messages:
+            flattened_record = msg.record
+            json.dump(flattened_record, file)
+            file.write("\n")
+
+    def handle_batch(self, messages, batch_count, dry_run, final_batch=False):
+        """Handle messages by writing them to files.
+        On the final batch, sends all files to ReSci as an import job.
 
         """
-        file_type = messages[0].stream
-        LOGGER.info("Sending batch with %d messages for table %s to %s",
-                    len(messages), file_type, self.resci_url)
+        stream = messages[0].stream
+        LOGGER.info("Writing batch with %d messages for stream %s", len(messages), stream)
 
         with TIMINGS.mode('serializing'):
-            file_name = self.create_file(messages, file_type, batch_count)
+            self.write_to_file(messages, stream, batch_count)
 
-        with TIMINGS.mode('posting'):
-            file_size = os.stat(file_name).st_size
-            LOGGER.debug('Posting %s file %s of size %d', file_type, file_name, file_size)
-            try:
-                if not dry_run:
-                    response = self.send(file_type, file_name)
-                    LOGGER.debug('Response is {}: {}'.format(response, response.content))
-                os.remove(file_name)
+        if final_batch:
+            with TIMINGS.mode('posting'):
+                # Close all files for writing
+                for stream, file in self.stream_files.items():
+                    file.close()
+                    file_size = os.stat(file.name).st_size
+                    LOGGER.debug('Including %s file %s with size %d', stream, file.name, file_size)
 
-            # An HTTPError means we got an HTTP response but it was a
-            # bad status code. Try to parse the "message" from the
-            # json body of the response, since ReSci should include
-            # the human-oriented message in that field. If there are
-            # any errors parsing the message, just include the
-            # stringified response.
-            except HTTPError as exc:
                 try:
-                    response_body = exc.response.json()
-                    if isinstance(response_body, dict) and 'message' in response_body:
-                        msg = response_body['message']
-                    else:
+                    if not dry_run:
+                        response = self.send_files()
+                        LOGGER.debug('Response is {}: {}'.format(response, response.content))
+
+                    for _, file in self.stream_files.items():
+                        os.remove(file.name)
+
+                # An HTTPError means we got an HTTP response but it was a
+                # bad status code. Try to parse the "message" from the
+                # json body of the response, since ReSci should include
+                # the human-oriented message in that field. If there are
+                # any errors parsing the message, just include the
+                # stringified response.
+                except HTTPError as exc:
+                    try:
+                        response_body = exc.response.json()
+                        if isinstance(response_body, dict) and 'message' in response_body:
+                            msg = response_body['message']
+                        else:
+                            msg = '{}: {}'.format(exc.response, exc.response.content)
+                    except:  # pylint: disable=bare-except
+                        LOGGER.exception('Exception while processing error response')
                         msg = '{}: {}'.format(exc.response, exc.response.content)
-                except:  # pylint: disable=bare-except
-                    LOGGER.exception('Exception while processing error response')
-                    msg = '{}: {}'.format(exc.response, exc.response.content)
-                raise TargetResciException('Error persisting data for ' +
-                                           '"' + file_type + '": ' +
-                                           msg)
-            # A RequestException other than HTTPError means we
-            # couldn't even connect to ReSci. The exception is likely
-            # to be very long and gross. Log the full details but just
-            # include the summary in the critical error message.
-            except RequestException as exc:
-                LOGGER.exception(exc)
-                raise TargetResciException('Error connecting to ReSci')
+                    raise TargetResciException('Error persisting data' + msg)
+                # A RequestException other than HTTPError means we
+                # couldn't even connect to ReSci. The exception is likely
+                # to be very long and gross. Log the full details but just
+                # include the summary in the critical error message.
+                except RequestException as exc:
+                    LOGGER.exception(exc)
+                    raise TargetResciException('Error connecting to ReSci')
 
 
 class TargetResci(object):
@@ -267,7 +262,7 @@ class TargetResci(object):
         # Time that the last batch was sent
         self.time_last_batch_sent = time.time()
 
-    def flush(self):
+    def flush(self, final_batch=False):
         """Send all the buffered messages to ReSci."""
 
         if self.messages:
@@ -275,7 +270,8 @@ class TargetResci(object):
             for handler in self.handlers:
                 handler.handle_batch(self.messages,
                                      self.batch_count,
-                                     self.dry_run)
+                                     self.dry_run,
+                                     final_batch)
             self.time_last_batch_sent = time.time()
             self.messages = []
             self.buffer_size_bytes = 0
@@ -323,7 +319,7 @@ class TargetResci(object):
         """Consume all the lines from the queue, flushing when done."""
         for line in reader:
             self.handle_line(line)
-        self.flush()
+        self.flush(True)
 
 
 def main_impl():
