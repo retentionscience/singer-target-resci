@@ -11,7 +11,7 @@ setup(
     py_modules=["target_resci"],
     install_requires=[
         'singer-python>=5.0.12',
-        'requests==2.18.4',
+        'requests==2.21.0',
         'psutil==5.3.1',
         'backoff==1.8.0'
     ],
