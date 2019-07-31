@@ -169,7 +169,13 @@ class ResciHandler(object):  # pylint: disable=too-few-public-methods
         LOGGER.debug('Writing batch %d to %s', batch_count, file.name)
         for msg in messages:
             flattened_record = msg.record
-            json.dump(flattened_record, file)
+
+            try:
+                json.dump(flattened_record, file)
+            except Exception as ex:
+                LOGGER.warn('Failed to write JSON: %s', str(flattened_record))
+                raise ex
+
             file.write("\n")
 
     def handle_batch(self, messages, batch_count, dry_run, final_batch=False):
