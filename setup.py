@@ -10,7 +10,7 @@ setup(
     classifiers=["Programming Language :: Python :: 3 :: Only"],
     py_modules=["target_resci"],
     install_requires=[
-        'singer-python>=5.0.12',
+        'singer-python==5.7.0',
         'requests==2.21.0',
         'psutil==5.3.1',
         'backoff'
