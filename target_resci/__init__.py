@@ -26,6 +26,7 @@ import psutil
 
 import requests
 from requests.exceptions import RequestException, HTTPError
+from requests_toolbelt import MultipartEncoder
 import pkg_resources
 import singer
 import backoff
@@ -139,14 +140,12 @@ class ResciHandler(object):  # pylint: disable=too-few-public-methods
 
         files_to_send = {}
         for stream, file in self.stream_files.items():
-            files_to_send[stream] = open(file.name, 'rb')
+            files_to_send[stream] = (file.name, open('file.name', 'rb'), 'text/plain')
 
-        params = {'import_type': self.import_type}
-        response = self.session.post(url,
-                                     data=params,
-                                     headers=headers,
-                                     files=files_to_send,
-                                     verify=ssl_verify)
+        params = MultipartEncoder(fields=files_to_send)
+        headers['Content-Type'] = params.content_type
+
+        response = self.session.post(url, headers=headers, data=params, verify=ssl_verify)
 
         response.raise_for_status()
         return response
