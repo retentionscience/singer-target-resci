@@ -141,9 +141,9 @@ class ResciHandler(object):  # pylint: disable=too-few-public-methods
         files_to_send = {}
         for stream, file in self.stream_files.items():
             files_to_send[stream] = (file.name, open(file.name, 'rb'), 'text/plain')
+        files_to_send['import_type'] = self.import_type
 
         params = MultipartEncoder(fields=files_to_send)
-        params['import_type'] = self.import_type
         headers['Content-Type'] = params.content_type
 
         response = self.session.post(url, headers=headers, data=params, verify=ssl_verify)
